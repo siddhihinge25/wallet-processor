@@ -1,15 +1,17 @@
 # Idempotent Payment / Wallet Event Processor
 
-A Spring Boot backend service that processes wallet debit transactions with idempotency and concurrency-safe balance updates.
+A Spring Boot backend service that processes wallet debit transactions with **idempotency**, **concurrency-safe balance updates**, and **insufficient-funds protection**.
+
+The project demonstrates how to safely process concurrent wallet transactions while ensuring that the same transaction is not processed more than once.
 
 ## Technology Stack
 
-- Java 17
-- Spring Boot 3.5.16
-- Spring Data JPA
-- H2 In-Memory Database
-- Maven
-- JUnit 5
+* Java 17
+* Spring Boot 3.5.16
+* Spring Data JPA
+* H2 In-Memory Database
+* Maven
+* JUnit 5
 
 ## API
 
@@ -17,7 +19,9 @@ A Spring Boot backend service that processes wallet debit transactions with idem
 
 **POST**
 
-`/api/v1/transactions/process`
+```text
+/api/v1/transactions/process
+```
 
 ### Request
 
@@ -28,90 +32,147 @@ A Spring Boot backend service that processes wallet debit transactions with idem
   "amount": 100.00,
   "type": "DEBIT"
 }
+```
 
+## Concurrency Handling
 
-Concurrency Handling
+The wallet balance is protected using a **database-level pessimistic write lock**.
 
-The wallet balance is protected using a database-level pessimistic write lock.
+`WalletRepository` uses `PESSIMISTIC_WRITE` through `findByUserIdForUpdate()`.
 
-WalletRepository uses PESSIMISTIC_WRITE with findByUserIdForUpdate().
+The transaction processing method is marked with `@Transactional`.
 
-The transaction processing method is marked with @Transactional.
+This ensures that concurrent debit requests for the same wallet are processed one at a time.
 
-This ensures that concurrent debit requests for the same wallet are processed one at a time. The balance is checked while the wallet is locked, preventing multiple requests from causing the wallet balance to become negative.
+The balance is checked while the wallet is locked, preventing multiple concurrent requests from causing the wallet balance to become negative.
 
-Idempotency
+## Idempotency
 
-Each transaction has a unique transactionId.
+Each transaction has a unique `transactionId`.
 
-The transactions table has a unique constraint on transactionId.
+The `transactions` table has a unique constraint on `transactionId`.
 
 Before processing a transaction, the service checks whether the transaction ID has already been processed.
 
 If the same transaction ID is received again, the request is rejected as a duplicate and the wallet is not debited again.
 
-For concurrent identical requests, the wallet lock serializes the requests. The first request succeeds, while subsequent requests detect the existing transaction.
+For concurrent identical requests, the wallet lock serializes the requests. The first request succeeds, while subsequent requests detect that the transaction has already been processed.
 
-Insufficient Funds
+## Insufficient Funds
 
 Before deducting money, the service compares the requested amount with the current wallet balance.
 
-If the balance is insufficient, an InsufficientFundsException is thrown and no successful transaction is created.
+If the balance is insufficient, an `InsufficientFundsException` is thrown and no successful transaction is created.
 
 Because the wallet is locked during this operation, simultaneous debit requests cannot all pass the balance check.
 
-Database
+## Database
 
 The application uses an H2 in-memory database:
 
+```text
 jdbc:h2:mem:walletdb
+```
 
 No external database setup is required.
 
 The database schema is recreated for the application/test lifecycle.
 
-Testing
+## Testing
 
 The project contains integration tests covering:
 
-A single valid debit transaction.
-Three simultaneous requests with the same transaction ID.
-Ten concurrent ₹100 debit requests against a wallet with ₹500 balance.
+1. A single valid debit transaction.
+2. Three simultaneous requests using the same transaction ID.
+3. Ten concurrent ₹100 debit requests against a wallet with a ₹500 balance.
 
-Run the tests with:
+### Run Tests
 
-mvn clean test
-Test Results
+Using the Maven Wrapper:
+
+**Windows PowerShell:**
+
+```powershell
+.\mvnw.cmd clean test
+```
+
+**Linux/macOS:**
+
+```bash
+./mvnw clean test
+```
+
+### Test Results
 
 All tests pass successfully:
 
+```text
 Tests run: 4
 Failures: 0
 Errors: 0
 Skipped: 0
 
 BUILD SUCCESS
-Test 1 — Single Valid Debit
+```
+
+### Test 1 — Single Valid Debit
+
+```text
 Initial balance    : ₹500.00
 Debit amount       : ₹100.00
 Final balance      : ₹400.00
 Transaction status : SUCCESS
 RESULT             : PASS
-Test 2 — Concurrent Duplicate Transactions
+```
+
+### Test 2 — Concurrent Duplicate Transactions
+
+```text
 Total requests      : 3
 Successful requests : 1
 Duplicate requests  : 2
 Final balance       : ₹400.00
 Transactions stored : 1
 RESULT              : PASS
-Test 3 — Concurrent Debits
+```
+
+### Test 3 — Concurrent Debits
+
+```text
 Total requests          : 10
 Successful requests     : 5
 Insufficient funds      : 5
 Final balance           : ₹0.00
 Successful transactions : 5
 RESULT                  : PASS
-Project Structure
+```
+
+## How to Run the Application
+
+Clone the repository:
+
+```bash
+git clone https://github.com/siddhihinge25/wallet-processor.git
+cd wallet-processor
+```
+
+Run the application on Windows:
+
+```powershell
+.\mvnw.cmd spring-boot:run
+```
+
+Run the application on Linux/macOS:
+
+```bash
+./mvnw spring-boot:run
+```
+
+The application uses an H2 in-memory database, so no external database configuration is required.
+
+## Project Structure
+
+```text
 wallet-processor/
 ├── src/
 │   ├── main/
@@ -125,23 +186,36 @@ wallet-processor/
 │   │   │       └── service/
 │   │   └── resources/
 │   │       └── application.properties
+│   │
 │   └── test/
 │       └── java/
 │           └── com/example/wallet_processor/
 │               ├── WalletProcessorApplicationTests.java
 │               └── WalletProcessorIntegrationTest.java
+│
+├── .mvn/
 ├── pom.xml
+├── mvnw
+├── mvnw.cmd
 ├── README.md
 └── DECISIONS.md
+```
 
-Error Handling
-Condition	                 HTTP Status
-Successful transaction	    200 OK
-Duplicate transaction	     409 CONFLICT
-Insufficient funds	         409 CONFLICT
-Invalid transaction type	400 BAD REQUEST
-Wallet not found	        400 BAD REQUEST
-Security and Dependency Maintenance
+## Error Handling
+
+| Condition                | HTTP Status       |
+| ------------------------ | ----------------- |
+| Successful transaction   | `200 OK`          |
+| Duplicate transaction    | `409 CONFLICT`    |
+| Insufficient funds       | `409 CONFLICT`    |
+| Invalid transaction type | `400 BAD REQUEST` |
+| Wallet not found         | `400 BAD REQUEST` |
+
+## Design Decisions
+
+The main design decisions, including concurrency control, idempotency, database selection, and transaction handling, are documented in [`DECISIONS.md`](DECISIONS.md).
+
+## Security and Dependency Maintenance
 
 The project uses Spring Boot 3.5.16.
 
@@ -149,16 +223,16 @@ The Spring Boot version was upgraded from 3.5.4 to 3.5.16 to use a newer maintai
 
 After the upgrade, the complete Maven test suite was executed successfully.
 
-AI-Assisted Development
+## AI-Assisted Development
 
 AI assistance was used during development for troubleshooting and design discussion.
 
-An earlier AI-assisted suggestion used a file-based H2 database for manual testing.
-
-This was not suitable for the assignment because the assignment requires an H2 in-memory database for zero-configuration testing.
+An earlier AI-assisted suggestion used a file-based H2 database for manual testing. This was not suitable for the assignment because the assignment requires an H2 in-memory database for zero-configuration testing.
 
 The final configuration uses:
 
+```text
 jdbc:h2:mem:walletdb
+```
 
-The detailed design decisions are documented in DECISIONS.md.
+The detailed design decisions are documented in `DECISIONS.md`.
